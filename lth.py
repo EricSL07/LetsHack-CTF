@@ -7,6 +7,7 @@ import json
 import ipaddress
 import time
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 
 # Diretório base para armazenar dados da ferramenta (sempre na home do usuário comum)
 BASE_DIRECTORY = os.path.expanduser("~/.lth")
@@ -210,6 +211,40 @@ def add_to_etc_hosts(ip, name):
     except subprocess.CalledProcessError as e:
         logging.error(f"Erro ao adicionar ao /etc/hosts: {e}")
 
+def run_nikto(ip, output_file):
+    logging.info(f"Iniciando scan com Nikto em {ip}...")
+    try:
+        subprocess.run(["nikto", "-h", ip, "-output", output_file], check=True)
+        logging.info(f"Nikto concluído! Resultados em: {output_file}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Erro ao executar o Nikto: {e}")
+    except FileNotFoundError:
+        logging.error("O utilitário 'nikto' não foi encontrado. Instale com 'sudo apt install nikto'.")
+
+def run_gobuster(ip, output_file):
+    logging.info(f"Iniciando scan com Gobuster em {ip}...")
+    try:
+        cmd = ["gobuster", "dir", "-u", f"http://{ip}", "-w", "/usr/share/wordlists/dirb/common.txt", "-o", output_file]
+        subprocess.run(cmd, check=True)
+        logging.info(f"Gobuster concluído! Resultados em: {output_file}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Erro ao executar o Gobuster: {e}")
+    except FileNotFoundError:
+        logging.error("O utilitário 'gobuster' não foi encontrado. Instale com 'sudo apt install gobuster'.")
+
+def run_webscan(ip, name):
+    target_dir = os.path.join(BASE_DIRECTORY, name)
+    nikto_output = os.path.join(target_dir, f"nikto_{ip}.txt")
+    gobuster_output = os.path.join(target_dir, f"gobuster_{ip}.txt")
+
+    logging.info(f"Iniciando scans web em paralelo (Nikto + Gobuster) em {name} ({ip})...")
+    
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        executor.submit(run_nikto, ip, nikto_output)
+        executor.submit(run_gobuster, ip, gobuster_output)
+        
+    logging.info(f"Todos os scans web para {name} foram finalizados!")
+
 def run_nmap(ip, name):
     target_dir = os.path.join(BASE_DIRECTORY, name)
     output_file = os.path.join(target_dir, f"nmap_{ip}.txt")
@@ -223,7 +258,18 @@ def run_nmap(ip, name):
     except subprocess.CalledProcessError as e:
         logging.error(f"Erro ao executar o nmap: {e}")
 
-    detect_ports(output_file)
+    ports = detect_ports(output_file)
+
+    # Se houver portas abertas, sugere o próximo passo
+    if ports:
+        logging.info(f"Portas abertas detectadas: {ports}")
+        if any(port == "80" for port, _ in ports):
+            logging.info("Porta 80 aberta!")
+            input_prompt = input("Deseja rodar o webscan (nikto + gobuster) agora em paralelo? (s/n): ").strip().lower()
+            if input_prompt == 's':
+                run_webscan(ip, name)
+            else:
+                logging.info("Você pode rodar o webscan depois com: 'lth webscan <nome>'")
 
 def detect_ports(output_file):
     if not os.path.exists(output_file):
@@ -241,6 +287,7 @@ def detect_ports(output_file):
 
     if ports:
         logging.info(f"Portas abertas encontradas: {ports}")
+        return ports
 
 class CustomArgumentParser(argparse.ArgumentParser):
     def error(self, message):
@@ -273,6 +320,10 @@ def main():
     parser_scan = subparsers.add_parser("scan", help="Inicia enumeração em um alvo conhecido")
     parser_scan.add_argument("target", help="IP ou Nome do alvo já registrado")
 
+    # Subcomando: WEBSCAN (Roda o Nikto e Gobuster em paralelo)
+    parser_webscan = subparsers.add_parser("webscan", help="Roda Nikto e Gobuster em paralelo em um alvo conhecido")
+    parser_webscan.add_argument("target", help="IP ou Nome do alvo já registrado")
+
     # Subcomando: VPN (Gerencia a conexão OpenVPN)
     parser_vpn = subparsers.add_parser("vpn", help="Gerencia a conexão OpenVPN (start, stop, status)")
     vpn_subparsers = parser_vpn.add_subparsers(dest="vpn_action", required=True, parser_class=CustomArgumentParser)
@@ -297,7 +348,8 @@ def main():
         start_setup(args.ip, args.name)
         add_to_etc_hosts(args.ip, args.name)
         logging.info("Setup concluído. Você já pode rodar 'lth scan <nome>'")
-        
+        logging.info("Se a porta 80 estiver aberta, você também pode rodar 'lth webscan <nome>'")
+
     elif args.command == "scan":
         name, ip = resolve_target(args.target)
         
@@ -306,6 +358,15 @@ def main():
             sys.exit(1)
             
         run_nmap(ip, name)
+
+    elif args.command == "webscan":
+        name, ip = resolve_target(args.target)
+        
+        if not name:
+            logging.error(f"Alvo '{args.target}' não encontrado. Use 'lth add <ip> <nome>' primeiro.")
+            sys.exit(1)
+            
+        run_webscan(ip, name)
 
     elif args.command == "vpn":
         if args.vpn_action == "start":
