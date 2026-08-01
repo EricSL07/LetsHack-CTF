@@ -1,0 +1,40 @@
+# .github/labeler.yml
+
+# 1. Regras por extensão ou caminho de arquivos
+frontend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/**/*.js'
+          - 'src/**/*.tsx'
+          - 'public/**/*'
+
+backend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'api/**/*'
+          - 'server/**/*.go'
+          - 'db/migrations/**/*'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**/*'
+          - '*.md'
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'package.json'
+          - 'package-lock.json'
+          - 'go.mod'
+          - 'Dockerfile'
+
+# 2. Regras por nome de Branch de Origem (Head Branch)
+Semver-Major:
+  - head-branch: ['^breaking/.*', '^major/.*']
+
+Semver-Minor:
+  - head-branch: ['^feat/.*', '^feature/.*']
+
+Semver-Patch:
+  - head-branch: ['^fix/.*', '^bugfix/.*']
