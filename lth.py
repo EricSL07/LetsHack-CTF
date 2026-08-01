@@ -99,7 +99,7 @@ def run_enum(ip, name):
 
 class CustomArgumentParser(argparse.ArgumentParser):
     def error(self, message):
-        self.print_usage(sys.stderr)
+        self.print_help(sys.stderr)
         sys.exit(2)
 
 # --- INTERFACE CLI ---
@@ -111,7 +111,11 @@ def main():
     if not os.path.exists(BASE_DIRECTORY):
         os.makedirs(BASE_DIRECTORY)
 
-    parser = CustomArgumentParser(description="LTH - Canivete Suíço para CTFs")
+    prog_name = os.path.basename(sys.argv[0])
+    if prog_name.endswith(".py"):
+        prog_name = prog_name[:-3]
+
+    parser = CustomArgumentParser(prog=prog_name, description="LTH - Canivete Suíço para CTFs")
     # Dest="command" cria uma variável args.command que guarda qual subcomando foi chamado
     subparsers = parser.add_subparsers(dest="command", required=True, parser_class=CustomArgumentParser)
 
