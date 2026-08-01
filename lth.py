@@ -6,10 +6,9 @@ import sys
 import json
 import ipaddress
 import time
-import signal
 import shutil
 
-# Diretório base para armazenar dados da ferramenta
+# Diretório base para armazenar dados da ferramenta (sempre na home do usuário comum)
 BASE_DIRECTORY = os.path.expanduser("~/.lth")
 
 # Arquivo onde a ferramenta vai guardar a memória dos alvos
@@ -72,7 +71,7 @@ def get_tun0_ip():
     return None 
 
 def start_vpn(ovpn_path=None):
-    """Inicia o OpenVPN em modo daemon (segundo plano)."""
+    """Inicia o OpenVPN em modo daemon (segundo plano) via sudo."""
     if ovpn_path:
         if not os.path.exists(ovpn_path):
             logging.error(f"Arquivo OVPN não encontrado: {ovpn_path}")
@@ -101,7 +100,7 @@ def start_vpn(ovpn_path=None):
     logging.info(f"Iniciando VPN com {target_ovpn}...")
 
     cmd = [
-        "openvpn",
+        "sudo", "openvpn",
         "--config", target_ovpn,
         "--writepid", VPN_PID_FILE,
         "--log", VPN_LOG_FILE,
@@ -124,7 +123,7 @@ def start_vpn(ovpn_path=None):
     except subprocess.CalledProcessError as e:
         logging.error(f"Erro ao iniciar a VPN: {e}")
     except FileNotFoundError:
-        logging.error("O utilitário 'openvpn' não foi encontrado no sistema. Instale com 'sudo apt install openvpn'.")
+        logging.error("O utilitário 'openvpn' ou 'sudo' não foi encontrado no sistema.")
 
 def vpn_status():
     """Exibe o status da conexão VPN e o IP tun0."""
@@ -150,7 +149,7 @@ def vpn_status():
             logging.info("STATUS: Desconectado.")
 
 def stop_vpn():
-    """Encerra graciosamente o processo OpenVPN."""
+    """Encerra graciosamente o processo OpenVPN via sudo."""
     if not os.path.exists(VPN_PID_FILE):
         ip = get_tun0_ip()
         if ip:
@@ -164,7 +163,7 @@ def stop_vpn():
 
     if pid and os.path.exists(f"/proc/{pid}"):
         try:
-            os.kill(int(pid), signal.SIGTERM)
+            subprocess.run(["sudo", "kill", "-15", pid], check=True)
             logging.info(f"Sinal de encerramento enviado para a VPN (PID: {pid}).")
             for _ in range(5):
                 time.sleep(1)
@@ -180,11 +179,6 @@ def stop_vpn():
     logging.info("VPN desconectada.")
 
 # --- FUNÇÕES CORE ---
-
-def check_privileges():
-    if os.geteuid() != 0:
-        logging.warning("Elevando privilégios via sudo...")
-        os.execvp("sudo", ["sudo", sys.executable] + sys.argv)
 
 def start_setup(ip, name):
     target_dir = os.path.join(BASE_DIRECTORY, name)
@@ -209,20 +203,22 @@ def add_to_etc_hosts(ip, name):
             logging.info(f"Alvo {name} já está no /etc/hosts.")
             return
 
-    with open(hosts_file, "a") as file:
-        file.write(entry)
-    logging.info(f"Alvo adicionado ao /etc/hosts: {ip} -> {name}")
+    try:
+        cmd = ["sudo", "tee", "-a", hosts_file]
+        subprocess.run(cmd, input=entry, text=True, capture_output=True, check=True)
+        logging.info(f"Alvo adicionado ao /etc/hosts: {ip} -> {name}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Erro ao adicionar ao /etc/hosts: {e}")
 
 def run_nmap(ip, name):
-    # Recalcula o diretório baseado no nome
     target_dir = os.path.join(BASE_DIRECTORY, name)
     output_file = os.path.join(target_dir, f"nmap_{ip}.txt")
 
     logging.info(f"Iniciando scan com o nmap em {name} ({ip})")
-    nmap_command = ["nmap", "-sV", "-T4", "-oN", output_file, ip]
+    nmap_command = ["sudo", "nmap", "-sV", "-T4", "-oN", output_file, ip]
 
     try:
-        subprocess.run(nmap_command, capture_output=True, text=True, check=True)
+        subprocess.run(nmap_command, check=True)
         logging.info(f"Scan concluído! Resultados em: {output_file}")
     except subprocess.CalledProcessError as e:
         logging.error(f"Erro ao executar o nmap: {e}")
@@ -230,6 +226,8 @@ def run_nmap(ip, name):
     detect_ports(output_file)
 
 def detect_ports(output_file):
+    if not os.path.exists(output_file):
+        return
     ports = []
     with open(output_file, "r") as f:
         content = f.read()
@@ -296,7 +294,6 @@ def main():
         if not is_valid_ip(args.ip):
             logging.error(f"IP inválido '{args.ip}'. Por favor, forneça um endereço IP (IPv4/IPv6) válido.")
             sys.exit(1)
-        check_privileges()
         start_setup(args.ip, args.name)
         add_to_etc_hosts(args.ip, args.name)
         logging.info("Setup concluído. Você já pode rodar 'lth scan <nome>'")
@@ -308,15 +305,12 @@ def main():
             logging.error(f"Alvo '{args.target}' não encontrado. Use 'lth add <ip> <nome>' primeiro.")
             sys.exit(1)
             
-        check_privileges()
         run_nmap(ip, name)
 
     elif args.command == "vpn":
         if args.vpn_action == "start":
-            check_privileges()
             start_vpn(args.file)
         elif args.vpn_action == "stop":
-            check_privileges()
             stop_vpn()
         elif args.vpn_action == "status":
             vpn_status()
